@@ -1,0 +1,37 @@
+{
+  "name": "@voicepilot/api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend API service for VoicePilot AI",
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test": "tsx --test test/multi_tenant_security.test.ts test/phase3_management.test.ts test/phase4_voice_engine.test.ts test/gemini_live_voice.test.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/websocket": "^11.3.7",
+    "@google/genai": "^3.6.1",
+    "@prisma/client": "6.19.3",
+    "@supabase/supabase-js": "^2.119.2",
+    "@voicepilot/shared": "*",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.13.4",
+    "@types/ws": "^8.18.2",
+    "prisma": "6.19.3",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.2"
+  }
+}

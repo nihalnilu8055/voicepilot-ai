@@ -1,0 +1,30 @@
+{
+  "name": "voicepilot-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multilingual AI-powered outbound sales calling SaaS",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n \"api,web\" -c \"blue,magenta\" \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "npm run dev --workspace=@voicepilot/api",
+    "dev:web": "npm run dev --workspace=@voicepilot/web",
+    "build": "npm run build:shared && npm run build:api && npm run build:web",
+    "build:shared": "npm run build --workspace=@voicepilot/shared",
+    "build:api": "npm run build --workspace=@voicepilot/api",
+    "build:web": "npm run build --workspace=@voicepilot/web",
+    "test": "npm run test --workspace=@voicepilot/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}

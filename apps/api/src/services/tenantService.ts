@@ -1,0 +1,486 @@
+import type { TenantRole, TenantDetailResponse, AuthMeResponse, AuditLogItem } from '@voicepilot/shared';
+import { prisma } from '../db/prisma.js';
+import type { VerifiedAuthUser } from './supabase.js';
+
+// In-memory fallback repository for local offline development & isolated testing
+interface InMemoryState {
+  profiles: Map<string, { id: string; email: string; fullName?: string | null; avatarUrl?: string | null; createdAt: Date; updatedAt: Date }>;
+  tenants: Map<string, { id: string; name: string; slug: string; createdById: string; createdAt: Date; updatedAt: Date }>;
+  memberships: Map<string, { id: string; tenantId: string; userId: string; role: TenantRole; createdAt: Date; updatedAt: Date }>;
+  auditLogs: Array<AuditLogItem>;
+}
+
+const memoryState: InMemoryState = {
+  profiles: new Map(),
+  tenants: new Map(),
+  memberships: new Map(),
+  auditLogs: [],
+};
+
+export class TenantService {
+  private useMemoryFallback = false;
+
+  constructor() {
+    // If DATABASE_URL is not set or placeholder, use in-memory store
+    if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('your-database-url-placeholder')) {
+      this.useMemoryFallback = true;
+    }
+  }
+
+  public setMemoryMode(enabled: boolean) {
+    this.useMemoryFallback = enabled;
+  }
+
+  public clearMemoryState() {
+    memoryState.profiles.clear();
+    memoryState.tenants.clear();
+    memoryState.memberships.clear();
+    memoryState.auditLogs = [];
+  }
+
+  public addMemberInMemory(tenantId: string, userId: string, role: TenantRole) {
+    const membershipId = `membership_${Math.random().toString(36).substring(2, 10)}`;
+    memoryState.memberships.set(membershipId, {
+      id: membershipId,
+      tenantId,
+      userId,
+      role,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+  }
+
+  /**
+   * Syncs/ensures user profile exists in database
+   */
+  async ensureUserProfile(user: VerifiedAuthUser) {
+    if (this.useMemoryFallback) {
+      if (!memoryState.profiles.has(user.id)) {
+        memoryState.profiles.set(user.id, {
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          avatarUrl: user.avatarUrl,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+      return memoryState.profiles.get(user.id)!;
+    }
+
+    return await prisma.userProfile.upsert({
+      where: { id: user.id },
+      create: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        avatarUrl: user.avatarUrl,
+      },
+      update: {
+        email: user.email,
+        fullName: user.fullName ?? undefined,
+        avatarUrl: user.avatarUrl ?? undefined,
+      },
+    });
+  }
+
+  /**
+   * Returns current user profile with all company memberships
+   */
+  async getAuthMe(user: VerifiedAuthUser): Promise<AuthMeResponse> {
+    await this.ensureUserProfile(user);
+
+    if (this.useMemoryFallback) {
+      const userMemberships: AuthMeResponse['memberships'] = [];
+      for (const m of memoryState.memberships.values()) {
+        if (m.userId === user.id) {
+          const tenant = memoryState.tenants.get(m.tenantId);
+          if (tenant) {
+            userMemberships.push({
+              id: m.id,
+              tenantId: m.tenantId,
+              role: m.role,
+              createdAt: m.createdAt.toISOString(),
+              tenant: {
+                id: tenant.id,
+                name: tenant.name,
+                slug: tenant.slug,
+              },
+            });
+          }
+        }
+      }
+
+      return {
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          avatarUrl: user.avatarUrl,
+          createdAt: new Date().toISOString(),
+        },
+        activeTenantId: userMemberships[0]?.tenantId ?? null,
+        memberships: userMemberships,
+      };
+    }
+
+    const profile = await prisma.userProfile.findUnique({
+      where: { id: user.id },
+      include: {
+        memberships: {
+          include: {
+            tenant: true,
+            role: true,
+          },
+        },
+      },
+    });
+
+    if (!profile) {
+      throw new Error('User profile not found');
+    }
+
+    const memberships: AuthMeResponse['memberships'] = profile.memberships.map((m) => ({
+      id: m.id,
+      tenantId: m.tenantId,
+      role: m.role.name as TenantRole,
+      createdAt: m.createdAt.toISOString(),
+      tenant: {
+        id: m.tenant.id,
+        name: m.tenant.name,
+        slug: m.tenant.slug,
+      },
+    }));
+
+    return {
+      user: {
+        id: profile.id,
+        email: profile.email,
+        fullName: profile.fullName,
+        avatarUrl: profile.avatarUrl,
+        createdAt: profile.createdAt.toISOString(),
+      },
+      activeTenantId: memberships[0]?.tenantId ?? null,
+      memberships,
+    };
+  }
+
+  /**
+   * Creates a new Company (Tenant) and sets creator as OWNER.
+   * Multi-tenant rule: Tenant ID is generated by backend (UUID), creator is assigned OWNER.
+   */
+  async createTenant(userId: string, input: { name: string; slug?: string }) {
+    const rawSlug = input.slug || input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const slug = `${rawSlug}-${Math.random().toString(36).substring(2, 6)}`;
+
+    if (this.useMemoryFallback) {
+      const tenantId = `tenant_${Math.random().toString(36).substring(2, 10)}`;
+      const tenant = {
+        id: tenantId,
+        name: input.name,
+        slug,
+        createdById: userId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      memoryState.tenants.set(tenantId, tenant);
+
+      const membershipId = `membership_${Math.random().toString(36).substring(2, 10)}`;
+      memoryState.memberships.set(membershipId, {
+        id: membershipId,
+        tenantId,
+        userId,
+        role: 'OWNER',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      this.logAudit(tenantId, userId, 'TENANT_CREATED', 'TENANT', tenantId, { name: input.name, slug });
+
+      return {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        role: 'OWNER' as TenantRole,
+        createdAt: tenant.createdAt.toISOString(),
+      };
+    }
+
+    // Prisma Transaction: Ensure owner role exists, create tenant, assign membership, log audit
+    const result = await prisma.$transaction(async (tx) => {
+      // Ensure roles exist
+      const ownerRole = await tx.role.upsert({
+        where: { name: 'OWNER' },
+        create: { name: 'OWNER', description: 'Company Owner' },
+        update: {},
+      });
+
+      const tenant = await tx.tenant.create({
+        data: {
+          name: input.name,
+          slug,
+          createdById: userId,
+        },
+      });
+
+      await tx.tenantMembership.create({
+        data: {
+          tenantId: tenant.id,
+          userId,
+          roleId: ownerRole.id,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          tenantId: tenant.id,
+          userId,
+          action: 'TENANT_CREATED',
+          entityType: 'TENANT',
+          entityId: tenant.id,
+          metadata: { name: input.name, slug },
+        },
+      });
+
+      return {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        role: 'OWNER' as TenantRole,
+        createdAt: tenant.createdAt.toISOString(),
+      };
+    });
+
+    return result;
+  }
+
+  /**
+   * Lists all tenants the authenticated user belongs to.
+   * Multi-tenant security rule: NEVER returns tenants user is not an active member of!
+   */
+  async listUserTenants(userId: string) {
+    if (this.useMemoryFallback) {
+      const list = [];
+      for (const m of memoryState.memberships.values()) {
+        if (m.userId === userId) {
+          const t = memoryState.tenants.get(m.tenantId);
+          if (t) {
+            list.push({
+              id: t.id,
+              name: t.name,
+              slug: t.slug,
+              role: m.role,
+              createdAt: t.createdAt.toISOString(),
+            });
+          }
+        }
+      }
+      return list;
+    }
+
+    const memberships = await prisma.tenantMembership.findMany({
+      where: { userId },
+      include: {
+        tenant: true,
+        role: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return memberships.map((m) => ({
+      id: m.tenant.id,
+      name: m.tenant.name,
+      slug: m.tenant.slug,
+      role: m.role.name as TenantRole,
+      createdAt: m.tenant.createdAt.toISOString(),
+    }));
+  }
+
+  /**
+   * Multi-tenant Isolation Check:
+   * Returns tenant details ONLY if userId is a valid member of this tenant.
+   * Throws 403 Forbidden if user is NOT a member of the requested tenant.
+   */
+  async getTenantById(tenantId: string, userId: string): Promise<TenantDetailResponse> {
+    if (this.useMemoryFallback) {
+      const tenant = memoryState.tenants.get(tenantId);
+      if (!tenant) {
+        const error = new Error('Tenant not found');
+        (error as any).statusCode = 404;
+        throw error;
+      }
+
+      // Check membership
+      let userRole: TenantRole | null = null;
+      const members: TenantDetailResponse['members'] = [];
+
+      for (const m of memoryState.memberships.values()) {
+        if (m.tenantId === tenantId) {
+          if (m.userId === userId) {
+            userRole = m.role;
+          }
+          const profile = memoryState.profiles.get(m.userId);
+          members.push({
+            id: m.id,
+            userId: m.userId,
+            role: m.role,
+            user: {
+              id: m.userId,
+              email: profile?.email || 'user@voicepilot.ai',
+              fullName: profile?.fullName || null,
+            },
+            createdAt: m.createdAt.toISOString(),
+          });
+        }
+      }
+
+      // MULTI-TENANT AUTHORIZATION BARRIER:
+      if (!userRole) {
+        const error = new Error('Forbidden: You do not have access to this tenant');
+        (error as any).statusCode = 403;
+        throw error;
+      }
+
+      return {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        createdById: tenant.createdById,
+        createdAt: tenant.createdAt.toISOString(),
+        updatedAt: tenant.updatedAt.toISOString(),
+        currentUserRole: userRole,
+        members,
+      };
+    }
+
+    // Database path: Query membership directly with compound key (tenantId, userId)
+    const membership = await prisma.tenantMembership.findUnique({
+      where: {
+        tenant_user_unique: {
+          tenantId,
+          userId,
+        },
+      },
+      include: {
+        role: true,
+        tenant: {
+          include: {
+            memberships: {
+              include: {
+                role: true,
+                user: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      // Check if tenant exists at all to return 404 vs 403
+      const tenantExists = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { id: true },
+      });
+
+      if (!tenantExists) {
+        const error = new Error('Tenant not found');
+        (error as any).statusCode = 404;
+        throw error;
+      }
+
+      // Tenant exists, but user is NOT a member: 403 Forbidden
+      const error = new Error('Forbidden: You do not have access to this tenant');
+      (error as any).statusCode = 403;
+      throw error;
+    }
+
+    const members: TenantDetailResponse['members'] = membership.tenant.memberships.map((m) => ({
+      id: m.id,
+      userId: m.userId,
+      role: m.role.name as TenantRole,
+      user: {
+        id: m.user.id,
+        email: m.user.email,
+        fullName: m.user.fullName,
+      },
+      createdAt: m.createdAt.toISOString(),
+    }));
+
+    return {
+      id: membership.tenant.id,
+      name: membership.tenant.name,
+      slug: membership.tenant.slug,
+      createdById: membership.tenant.createdById,
+      createdAt: membership.tenant.createdAt.toISOString(),
+      updatedAt: membership.tenant.updatedAt.toISOString(),
+      currentUserRole: membership.role.name as TenantRole,
+      members,
+    };
+  }
+
+  /**
+   * Log an audit event
+   */
+  async logAudit(tenantId: string, userId: string | null, action: string, entityType: string, entityId?: string, metadata?: Record<string, unknown>) {
+    if (this.useMemoryFallback) {
+      const logItem: AuditLogItem = {
+        id: `audit_${Math.random().toString(36).substring(2, 10)}`,
+        tenantId,
+        userId,
+        action,
+        entityType,
+        entityId,
+        metadata,
+        createdAt: new Date().toISOString(),
+      };
+      memoryState.auditLogs.unshift(logItem);
+      return;
+    }
+
+    try {
+      await prisma.auditLog.create({
+        data: {
+          tenantId,
+          userId,
+          action,
+          entityType,
+          entityId,
+          metadata: metadata ? (metadata as any) : undefined,
+        },
+      });
+    } catch (e) {
+      console.error('Failed to write audit log:', e);
+    }
+  }
+
+  /**
+   * Get audit logs for a tenant (only for OWNER and ADMIN)
+   */
+  async getTenantAuditLogs(tenantId: string, userId: string) {
+    // Check permission first
+    const tenantDetail = await this.getTenantById(tenantId, userId);
+    if (tenantDetail.currentUserRole !== 'OWNER' && tenantDetail.currentUserRole !== 'ADMIN') {
+      const err = new Error('Forbidden: Insufficient permissions to view audit logs');
+      (err as any).statusCode = 403;
+      throw err;
+    }
+
+    if (this.useMemoryFallback) {
+      return memoryState.auditLogs.filter((l) => l.tenantId === tenantId);
+    }
+
+    return await prisma.auditLog.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: {
+        user: {
+          select: { id: true, email: true, fullName: true },
+        },
+      },
+    });
+  }
+}
+
+export const tenantService = new TenantService();

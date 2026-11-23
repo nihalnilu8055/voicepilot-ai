@@ -1,0 +1,694 @@
+// Prisma schema for VoicePilot AI - Phase 4: AI Voice Engine
+// Compatible with Supabase PostgreSQL (Connection Pooling & Direct Connections)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  AGENT
+  VIEWER
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  NOT_INTERESTED
+  CALLBACK
+  CONVERTED
+  LOST
+}
+
+enum ConsentStatus {
+  CONSENT_GRANTED
+  CONSENT_REVOKED
+  PENDING_VERIFICATION
+  LAWFUL_BASIS
+}
+
+enum LeadSource {
+  WEBSITE
+  INBOUND
+  COLD_OUTREACH
+  REFERRAL
+  EVENT
+  PAID_ADS
+  CSV_IMPORT
+  OTHER
+}
+
+enum SalesObjective {
+  LEAD_GENERATION
+  DIRECT_SALES
+  BOTH
+}
+
+enum SalesPersonality {
+  CONSULTATIVE
+}
+
+enum CampaignStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum CampaignLeadStatus {
+  PENDING
+  SCHEDULED
+  EXCLUDED
+  COMPLETED
+}
+
+enum KnowledgeCategory {
+  PRODUCTS
+  PRICING
+  POLICIES
+  FAQ
+  GENERAL
+}
+
+enum VoiceSessionStatus {
+  INITIALIZING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  FAILED
+}
+
+enum VoiceGender {
+  MALE
+  FEMALE
+}
+
+enum ConversationSender {
+  USER
+  AI
+  SYSTEM
+}
+
+enum DocumentType {
+  PDF
+  DOCX
+  TXT
+  CSV
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum TrainingVersionStatus {
+  DRAFT
+  SUBMITTED_FOR_APPROVAL
+  APPROVED
+  ACTIVATED
+  REJECTED
+  ARCHIVED
+}
+
+enum ExampleScenario {
+  PRODUCT_EXPLANATION
+  OBJECTION_HANDLING
+  PRICE_NEGOTIATION
+  QUALIFICATION
+  CALLBACK_SCHEDULING
+  GENERAL
+}
+
+enum QualificationOutcome {
+  QUALIFIED
+  CALLBACK_REQUESTED
+  NOT_INTERESTED
+  NEEDS_FOLLOW_UP
+}
+
+model UserProfile {
+  id        String   @id // Maps directly to Supabase auth.users.id (UUID)
+  email     String   @unique
+  fullName  String?  @map("full_name")
+  avatarUrl String?  @map("avatar_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  memberships           TenantMembership[]
+  createdTenants        Tenant[]           @relation("TenantCreator")
+  auditLogs             AuditLog[]
+  createdLeads          Lead[]             @relation("LeadCreator")
+  assignedLeads         Lead[]             @relation("LeadAssignedAgent")
+  createdCampaigns      Campaign[]         @relation("CampaignCreator")
+  approvedCampaigns     Campaign[]         @relation("CampaignApprover")
+  initiatedVoiceSessions VoiceSession[]     @relation("VoiceSessionInitiator")
+  createdTrainingVersions TrainingVersion[]   @relation("TrainingVersionCreator")
+  approvedTrainingVersions TrainingVersion[]  @relation("TrainingVersionApprover")
+  activatedTrainingVersions TrainingVersion[] @relation("TrainingVersionActivator")
+  uploadedDocuments       TenantDocument[]    @relation("DocumentUploader")
+  reviewedEvaluations     TrainingEvaluation[] @relation("EvaluationReviewer")
+
+  @@map("user_profiles")
+}
+
+model Tenant {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String   @map("created_by_id")
+
+  // Relationships
+  createdBy               UserProfile              @relation("TenantCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  memberships             TenantMembership[]
+  auditLogs               AuditLog[]
+  leads                   Lead[]
+  campaigns               Campaign[]
+  campaignLeads           CampaignLead[]
+  companyKnowledge        CompanyKnowledge[]
+  voiceConfigs            VoiceConfig[]
+  voiceSessions           VoiceSession[]
+  conversationMessages    ConversationMessage[]
+  conversationEvaluations ConversationEvaluation[]
+  trainingDocuments       TenantDocument[]
+  documentChunks          DocumentChunk[]
+  trainingVersions        TrainingVersion[]
+  trainingVersionDocuments TrainingVersionDocument[]
+  trainingVersionChunks   TrainingVersionChunk[]
+  trainingInstructions    TrainingInstruction[]
+  conversationExamples    ConversationExample[]
+  trainingEvaluations     TrainingEvaluation[]
+
+  @@index([slug])
+  @@index([createdById])
+  @@map("tenants")
+}
+
+model Role {
+  id          String     @id @default(uuid())
+  name        TenantRole @unique
+  description String?
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  // Relationships
+  memberships TenantMembership[]
+
+  @@map("roles")
+}
+
+model TenantMembership {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  userId    String   @map("user_id")
+  roleId    String   @map("role_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role        @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, userId], name: "tenant_user_unique")
+  @@index([tenantId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("tenant_memberships")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  userId     String?  @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  metadata   Json?
+  ipAddress  String?  @map("ip_address")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relationships
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   UserProfile? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Lead {
+  id                 String        @id @default(uuid())
+  tenantId           String        @map("tenant_id")
+  fullName           String        @map("full_name")
+  phoneNumber        String        @map("phone_number")
+  email              String?
+  companyName        String?       @map("company_name")
+  country            String        @default("IN")
+  languagePreference String        @default("en-IN") @map("language_preference")
+  leadSource         LeadSource    @default(OTHER) @map("lead_source")
+  status             LeadStatus    @default(NEW)
+  notes              String?
+  assignedAgentId    String?       @map("assigned_agent_id")
+  consentStatus      ConsentStatus @default(PENDING_VERIFICATION) @map("consent_status")
+  consentSource      String?       @map("consent_source")
+  consentDate        DateTime?     @map("consent_date")
+  isDnc              Boolean       @default(false) @map("is_dnc")
+  dncReason          String?       @map("dnc_reason")
+  dncUpdatedAt       DateTime?     @map("dnc_updated_at")
+  isCallable         Boolean       @default(false) @map("is_callable")
+  createdById        String        @map("created_by_id")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedAgent           UserProfile?             @relation("LeadAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  createdBy               UserProfile              @relation("LeadCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  campaignLeads           CampaignLead[]
+  voiceSessions           VoiceSession[]
+  conversationEvaluations ConversationEvaluation[]
+
+  @@unique([tenantId, phoneNumber], name: "tenant_phone_unique")
+  @@index([tenantId])
+  @@index([phoneNumber])
+  @@index([email])
+  @@index([status])
+  @@index([isDnc])
+  @@index([isCallable])
+  @@map("leads")
+}
+
+model Campaign {
+  id                String           @id @default(uuid())
+  tenantId          String           @map("tenant_id")
+  name              String
+  description       String?
+  salesObjective    SalesObjective   @default(LEAD_GENERATION) @map("sales_objective")
+  salesPersonality  SalesPersonality @default(CONSULTATIVE) @map("sales_personality")
+  preferredLanguage String           @default("en-IN") @map("preferred_language")
+  voicePreference   String           @default("Priya (Warm)") @map("voice_preference")
+  startDate         String           @map("start_date")
+  startTime         String           @map("start_time")
+  timezone          String           @default("Asia/Kolkata")
+  status            CampaignStatus   @default(DRAFT)
+  createdById       String           @map("created_by_id")
+  approvedById      String?          @map("approved_by_id")
+  approvedAt        DateTime?        @map("approved_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     UserProfile    @relation("CampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy    UserProfile?   @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  campaignLeads CampaignLead[]
+  voiceConfigs  VoiceConfig[]
+  voiceSessions VoiceSession[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("campaigns")
+}
+
+model CampaignLead {
+  id          String             @id @default(uuid())
+  campaignId  String             @map("campaign_id")
+  leadId      String             @map("lead_id")
+  tenantId    String             @map("tenant_id")
+  status      CampaignLeadStatus @default(PENDING)
+  isCallable  Boolean            @default(false) @map("is_callable")
+  unfitReason String?            @map("unfit_reason")
+  addedAt     DateTime           @default(now()) @map("added_at")
+
+  // Relationships
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  lead     Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, leadId], name: "campaign_lead_unique")
+  @@index([campaignId])
+  @@index([leadId])
+  @@index([tenantId])
+  @@map("campaign_leads")
+}
+
+model CompanyKnowledge {
+  id         String            @id @default(uuid())
+  tenantId   String            @map("tenant_id")
+  title      String
+  category   KnowledgeCategory @default(PRODUCTS)
+  content    String            @db.Text
+  tags       String[]          @default([])
+  isApproved Boolean           @default(true) @map("is_approved")
+  createdAt  DateTime          @default(now()) @map("created_at")
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([category])
+  @@index([isApproved])
+  @@map("company_knowledge")
+}
+
+model VoiceConfig {
+  id                   String           @id @default(uuid())
+  tenantId             String           @map("tenant_id")
+  campaignId           String?          @map("campaign_id")
+  defaultLanguage      String           @default("en-IN") @map("default_language")
+  supportedLanguages   String[]         @default(["en-IN", "ml-IN"]) @map("supported_languages")
+  voiceGender          VoiceGender      @default(FEMALE) @map("voice_gender")
+  voiceName            String           @default("Priya (Warm)") @map("voice_name")
+  personality          SalesPersonality @default(CONSULTATIVE)
+  pitch                Float            @default(1.0)
+  speakingRate         Float            @default(1.0) @map("speaking_rate")
+  systemPromptOverride String?          @map("system_prompt_override") @db.Text
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaign Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([campaignId])
+  @@map("voice_configs")
+}
+
+model VoiceSession {
+  id                   String                @id @default(uuid())
+  tenantId             String                @map("tenant_id")
+  campaignId           String?               @map("campaign_id")
+  leadId               String?               @map("lead_id")
+  initiatedById        String                @map("initiated_by_id")
+  language             String                @default("en-IN")
+  voiceName            String                @default("Priya (Warm)") @map("voice_name")
+  status               VoiceSessionStatus    @default(ACTIVE)
+  startedAt            DateTime              @default(now()) @map("started_at")
+  endedAt              DateTime?             @map("ended_at")
+  durationSeconds      Int                   @default(0) @map("duration_seconds")
+  qualificationOutcome QualificationOutcome? @map("qualification_outcome")
+  callbackTime         DateTime?             @map("callback_time")
+  notes                String?               @db.Text
+  trainingVersionId    String?               @map("training_version_id")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaign             Campaign?               @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  lead                 Lead?                   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  initiatedBy          UserProfile             @relation("VoiceSessionInitiator", fields: [initiatedById], references: [id], onDelete: Restrict)
+  trainingVersion      TrainingVersion?        @relation(fields: [trainingVersionId], references: [id], onDelete: Restrict)
+  messages             ConversationMessage[]
+  evaluation           ConversationEvaluation?
+  trainingEvaluation   TrainingEvaluation?
+
+  @@index([tenantId])
+  @@index([campaignId])
+  @@index([leadId])
+  @@index([trainingVersionId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("voice_sessions")
+}
+
+model ConversationMessage {
+  id         String             @id @default(uuid())
+  sessionId  String             @map("session_id")
+  tenantId   String             @map("tenant_id")
+  sender     ConversationSender
+  text       String             @db.Text
+  language   String?
+  audioUrl   String?            @map("audio_url")
+  confidence Float?
+  timestamp  DateTime           @default(now())
+  latencyMs  Int?               @map("latency_ms")
+
+  // Relationships
+  session VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([tenantId])
+  @@index([timestamp])
+  @@map("conversation_messages")
+}
+
+model ConversationEvaluation {
+  id                   String        @id @default(uuid())
+  sessionId            String        @unique @map("session_id")
+  tenantId             String        @map("tenant_id")
+  leadId               String?       @map("lead_id")
+  leadScore            Int           @default(0) @map("lead_score")
+  sentiment            String        @default("NEUTRAL")
+  objectionsRaised     Json?         @map("objections_raised")
+  customerInterest     String        @default("MEDIUM") @map("customer_interest")
+  qualificationSummary String        @map("qualification_summary") @db.Text
+  suggestedNextStep    String        @map("suggested_next_step") @db.Text
+  createdAt            DateTime      @default(now()) @map("created_at")
+
+  // Relationships
+  session VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead    Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@index([tenantId])
+  @@index([leadId])
+  @@map("conversation_evaluations")
+}
+
+model TenantDocument {
+  id                  String         @id @default(uuid())
+  tenantId            String         @map("tenant_id")
+  fileName            String         @map("file_name") @db.VarChar(255)
+  fileType            DocumentType   @map("file_type")
+  fileSizeBytes       BigInt         @map("file_size_bytes")
+  fileHashSha256      String         @map("file_hash_sha256") @db.VarChar(64)
+  storagePath         String         @map("storage_path")
+  category            KnowledgeCategory @default(PRODUCTS)
+  status              DocumentStatus @default(PENDING)
+  extractedTextLength Int            @default(0) @map("extracted_text_length")
+  chunkCount          Int            @default(0) @map("chunk_count")
+  errorMessage        String?        @map("error_message")
+  uploadedById        String         @map("uploaded_by_id")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant              Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy          UserProfile    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  chunks              DocumentChunk[]
+  versionDocuments    TrainingVersionDocument[]
+
+  @@unique([tenantId, fileHashSha256], name: "uq_tenant_file_hash")
+  @@unique([id, tenantId], name: "tenant_document_unique")
+  @@index([tenantId])
+  @@index([category])
+  @@index([status])
+  @@map("tenant_documents")
+}
+
+model DocumentChunk {
+  id         String         @id @default(uuid())
+  documentId String         @map("document_id")
+  tenantId   String         @map("tenant_id")
+  chunkIndex Int            @map("chunk_index")
+  content    String         @db.Text
+  tokenCount Int            @default(0) @map("token_count")
+  metadata   Json?          @default("{}")
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  // Relationships
+  document   TenantDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex], name: "uq_document_chunk")
+  @@unique([id, tenantId], name: "tenant_chunk_unique")
+  @@index([documentId])
+  @@index([tenantId])
+  @@map("document_chunks")
+}
+
+model TrainingVersion {
+  id               String                @id @default(uuid())
+  tenantId         String                @map("tenant_id")
+  versionNumber    String                @map("version_number") @db.VarChar(50)
+  status           TrainingVersionStatus @default(DRAFT)
+  changelog        String?               @db.Text
+  rejectionReason  String?               @map("rejection_reason") @db.Text
+  createdById      String                @map("created_by_id")
+  approvedById     String?               @map("approved_by_id")
+  approvedAt       DateTime?             @map("approved_at")
+  activatedById    String?               @map("activated_by_id")
+  activatedAt      DateTime?             @map("activated_at")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+
+  // Relationships
+  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy        UserProfile           @relation("TrainingVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy       UserProfile?          @relation("TrainingVersionApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  activatedBy      UserProfile?          @relation("TrainingVersionActivator", fields: [activatedById], references: [id], onDelete: SetNull)
+  versionDocuments TrainingVersionDocument[]
+  versionChunks    TrainingVersionChunk[]
+  instructions     TrainingInstruction?
+  examples         ConversationExample[]
+  voiceSessions    VoiceSession[]
+  evaluations      TrainingEvaluation[]
+
+  @@unique([tenantId, versionNumber], name: "uq_tenant_version_number")
+  @@unique([id, tenantId], name: "tenant_version_unique")
+  @@index([tenantId])
+  @@index([status])
+  @@map("training_versions")
+}
+
+model TrainingVersionDocument {
+  id              String          @id @default(uuid())
+  versionId       String          @map("version_id")
+  documentId      String?         @map("document_id")
+  tenantId        String          @map("tenant_id")
+  fileName        String          @map("file_name") @db.VarChar(255)
+  fileType        DocumentType    @map("file_type")
+  fileSizeBytes   BigInt          @map("file_size_bytes")
+  fileHashSha256  String          @map("file_hash_sha256") @db.VarChar(64)
+  storagePath     String          @map("storage_path")
+  category        KnowledgeCategory @default(PRODUCTS)
+  extractedText   String          @map("extracted_text") @db.Text
+  chunkCount      Int             @default(0) @map("chunk_count")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  // Relationships
+  version         TrainingVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  document        TenantDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  chunks          TrainingVersionChunk[]
+
+  @@unique([versionId, fileHashSha256], name: "uq_version_document_hash")
+  @@unique([id, tenantId], name: "tenant_version_doc_unique")
+  @@index([versionId])
+  @@index([documentId])
+  @@index([tenantId])
+  @@map("training_version_documents")
+}
+
+model TrainingVersionChunk {
+  id                String                  @id @default(uuid())
+  versionDocumentId String                  @map("version_document_id")
+  versionId         String                  @map("version_id")
+  tenantId          String                  @map("tenant_id")
+  chunkIndex        Int                     @map("chunk_index")
+  content           String                  @db.Text
+  tokenCount        Int                     @default(0) @map("token_count")
+  metadata          Json?                   @default("{}")
+  createdAt         DateTime                @default(now()) @map("created_at")
+
+  // Relationships
+  versionDocument   TrainingVersionDocument @relation(fields: [versionDocumentId], references: [id], onDelete: Cascade)
+  version           TrainingVersion         @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  tenant            Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([versionDocumentId, chunkIndex], name: "uq_version_doc_chunk")
+  @@unique([id, tenantId], name: "tenant_version_chunk_unique")
+  @@index([versionDocumentId])
+  @@index([versionId])
+  @@index([tenantId])
+  @@map("training_version_chunks")
+}
+
+model TrainingInstruction {
+  id                String          @id @default(uuid())
+  versionId         String          @unique @map("version_id")
+  tenantId          String          @map("tenant_id")
+  companyIdentity   String          @map("company_identity") @db.Text
+  salesObjectives   String          @map("sales_objectives") @db.Text
+  consultativeRules String          @map("consultative_rules") @db.Text
+  restrictedTopics  String          @map("restricted_topics") @db.Text
+  approvedClaims    String          @map("approved_claims") @db.Text
+  pricingPolicy     String          @map("pricing_policy") @db.Text
+  handoffTriggers   String          @map("handoff_triggers") @db.Text
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  // Relationships
+  version           TrainingVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([id, tenantId], name: "tenant_instruction_unique")
+  @@index([versionId])
+  @@index([tenantId])
+  @@map("training_instructions")
+}
+
+model ConversationExample {
+  id             String          @id @default(uuid())
+  versionId      String          @map("version_id")
+  tenantId       String          @map("tenant_id")
+  customerQuery  String          @map("customer_query") @db.Text
+  agentResponse  String          @map("agent_response") @db.Text
+  language       String          @default("en-IN") @db.VarChar(20)
+  scenario       ExampleScenario @default(GENERAL)
+  notes          String?         @db.Text
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  // Relationships
+  version        TrainingVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([id, tenantId], name: "tenant_example_unique")
+  @@index([versionId])
+  @@index([tenantId])
+  @@index([scenario])
+  @@map("conversation_examples")
+}
+
+model TrainingEvaluation {
+  id                       String          @id @default(uuid())
+  sessionId                String          @unique @map("session_id")
+  versionId                String?         @map("version_id")
+  tenantId                 String          @map("tenant_id")
+  pricingAccuracyScore     Int             @default(100) @map("pricing_accuracy_score")
+  specAccuracyScore        Int             @default(100) @map("spec_accuracy_score")
+  consultativeQualityScore Int             @default(100) @map("consultative_quality_score")
+  languageFluencyScore     Int             @default(100) @map("language_fluency_score")
+  overallCompliancePassed  Boolean         @default(true) @map("overall_compliance_passed")
+  mistakesDetected         Json?           @default("[]") @map("mistakes_detected")
+  unapprovedPricingFlagged Boolean         @default(false) @map("unapproved_pricing_flagged")
+  recommendedImprovements  String?         @map("recommended_improvements") @db.Text
+  reviewedById             String?         @map("reviewed_by_id")
+  reviewedAt               DateTime?       @map("reviewed_at")
+  createdAt                DateTime        @default(now()) @map("created_at")
+
+  // Relationships
+  session                  VoiceSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  version                  TrainingVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  tenant                   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reviewedBy               UserProfile?    @relation("EvaluationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@unique([id, tenantId], name: "tenant_eval_unique")
+  @@index([sessionId])
+  @@index([versionId])
+  @@index([tenantId])
+  @@map("training_evaluations")
+}
