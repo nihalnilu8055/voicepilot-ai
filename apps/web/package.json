@@ -6,7 +6,8 @@
   "description": "Frontend Web Application for VoicePilot AI",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build:shared": "npm run build --workspace=@voicepilot/shared",
+    "build": "npm run build:shared && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
