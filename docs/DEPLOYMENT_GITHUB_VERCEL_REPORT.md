@@ -3,7 +3,7 @@
 **Document Version:** 1.0.0  
 **Date:** November 23, 2026  
 **Auditor / Engineer:** Lead DevOps & Cloud Solutions Architect  
-**Repository:** [https://github.com/nihalnilu8055/VoicePilot-AI](https://github.com/nihalnilu8055/VoicePilot-AI)  
+**Repository:** [https://github.com/nihalnilu8055/voicepilot-ai](https://github.com/nihalnilu8055/voicepilot-ai)  
 **Target Platform:** Vercel (Monorepo Architecture)  
 **Strict Mandate:** Zero secret exposure, ₹0 budget verification, zero destructive actions, truthful verification reporting.
 
