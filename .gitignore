@@ -26,6 +26,8 @@ jspm_packages/
 
 # TypeScript cache and builds
 *.tsbuildinfo
+.vite/
+.vite
 dist/
 build/
 .dist/
